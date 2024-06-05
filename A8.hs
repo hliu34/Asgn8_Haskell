@@ -87,7 +87,7 @@ interp (IfC exp1 exp2 exp3) env = do  -- do is basically like {seq}
     cond <- interp exp1 env
     case cond of
         BoolV True -> interp exp2 env
-        BoolV True -> interp exp3 env
+        BoolV False -> interp exp3 env
         _ -> throwError "Error: Condition in IfC must be a boolean"
 interp (LambC params body) env = return (CloV params body env)
 interp (AppC fun args) env = do
@@ -122,7 +122,8 @@ serialize :: Value -> String
 serialize (NumV n) = show n
 serialize (StringV s) = show s
 serialize (BoolV b) = show b
-
+serialize (CloV _ _ _) = "#<procedure>"
+serialize (OpV op) = "#<primitive " ++ op ++ ">"
 
 -- Testing requires us to make our own checkEqual Function 
 
@@ -134,17 +135,6 @@ checkEqual expected actual =
 
 
 main = do
-  -- Create some ExprC objects
-  let numExpr = NumC 3.14
-  let idExpr = IdC "x"
-  let stringExpr = StringC "hello"
-  let ifExpr = IfC (IdC "y") (StringC "hello") (NumC 3.12)
-  let lambExpr = LambC ["a", "b"] (AppC (IdC "+") [IdC "a", IdC "b"])
-  let appExpr = AppC lambExpr [NumC 3, NumC 4]
-  let ifExprFalse = IfC (IdC "false") (StringC "hello") (NumC 3.12)
-  let nestedIfExpr = IfC (IdC "true") (NumC 2.0) (NumC 10.0)
-  let nestedLambExpr = LambC ["a"] (LambC ["b"] (AppC (IdC "+") [IdC "a", IdC "b"]))
-  let nestedAppExpr = AppC (AppC nestedLambExpr [NumC 2]) [NumC 3]
   let topEnv = [
           Binding "true" (BoolV True),
           Binding "false" (BoolV False),
@@ -171,6 +161,21 @@ main = do
   -- if error, print error
   -- else serialize the Value :)  
 
+  --------- TESTS ---------
+  -- interp tests
+  -- Create some ExprC objects
+  let numExpr = NumC 3.14
+  let idExpr = IdC "x"
+  let stringExpr = StringC "hello"
+  let ifExpr = IfC (IdC "y") (StringC "hello") (NumC 3.12)
+  let lambExpr = LambC ["a", "b"] (AppC (IdC "+") [IdC "a", IdC "b"])
+  let appExpr = AppC lambExpr [NumC 3, NumC 4]
+  let ifExprFalse = IfC (IdC "false") (StringC "hello") (NumC 3.12)
+  let nestedIfExpr = IfC (IdC "true") (NumC 2.0) (NumC 10.0)
+  let nestedLambExpr = LambC ["a"] (LambC ["b"] (AppC (IdC "+") [IdC "a", IdC "b"]))
+  let nestedAppExpr = AppC (AppC nestedLambExpr [NumC 2]) [NumC 3]
+  let addingFourNumbers = AppC (LambC ["a", "b", "c", "d"] (AppC (IdC "+") [AppC (IdC "+") [IdC "a", IdC "b"], AppC (IdC "+") [IdC "c", IdC "d"]])) [NumC 1, NumC 2, NumC 3, NumC 4]
+
   let numResult = handleResult (runExcept (interp numExpr topEnv))
   let idResult = handleResult (runExcept (interp idExpr topEnv))
   let stringResult = handleResult (runExcept (interp stringExpr topEnv))
@@ -179,9 +184,9 @@ main = do
   let nestedIfResult = handleResult (runExcept (interp nestedIfExpr topEnv))
   let nestedAppResult = handleResult (runExcept (interp nestedAppExpr topEnv))
 
-
-  
-
+  let addingFourNumbersResult = handleResult (runExcept (interp addingFourNumbers topEnv))
+  let errorResult = handleResult (runExcept (interp (AppC (IdC "doesntExist") [(NumC 1)]) topEnv))
+  print errorResult
   -- Check equality of results
   checkEqual "3.14" numResult
   checkEqual "42.0" idResult
@@ -190,8 +195,90 @@ main = do
   checkEqual "7.0" appResult
   checkEqual "2.0" nestedIfResult
   checkEqual "5.0" nestedAppResult
+  checkEqual "10.0" addingFourNumbersResult
+  checkEqual "Error: Unable to find in Environment" errorResult
 
 
+  -- extendEnv tests
+  let handleEnvResult result =
+          case result of
+            Left err -> err
+            Right env -> show env
+  let env = []
+  let env1 = [Binding "x" (NumV 1.0)]
+  let env2 = [Binding "x" (NumV 1.0), Binding "y" (NumV 2.0)]
+  let env3 = [Binding "x" (NumV 1.0), Binding "y" (NumV 2.0), Binding "z" (NumV 3.0)]
+  let env4 = [Binding "x" (NumV 1.0), Binding "y" (NumV 2.0), Binding "z" (NumV 3.0), Binding "a" (NumV 4.0), Binding "b" (NumV 5.0)]
+  let result1 = handleEnvResult (runExcept (extendEnv env ["x"] [NumV 1.0]))
+  let result2 = handleEnvResult (runExcept (extendEnv env1 ["y"] [NumV 2.0]))
+  let result3 = handleEnvResult (runExcept (extendEnv env2 ["z"] [NumV 3.0]))
+  let result4 = handleEnvResult (runExcept (extendEnv env3 ["a", "b"] [NumV 4.0, NumV 5.0]))
+  let errorResult1 = handleEnvResult (runExcept (extendEnv env ["x"] [NumV 1.0, NumV 2.0]))
+  let errorResult2 = handleEnvResult (runExcept (extendEnv env ["x", "y"] [NumV 1.0]))
+  checkEqual "[Binding \"x\" (NumV 1.0)]" result1
+  checkEqual "[Binding \"x\" (NumV 1.0),Binding \"y\" (NumV 2.0)]" result2
+  checkEqual "[Binding \"x\" (NumV 1.0),Binding \"y\" (NumV 2.0),Binding \"z\" (NumV 3.0)]" result3
+  checkEqual "[Binding \"x\" (NumV 1.0),Binding \"y\" (NumV 2.0),Binding \"z\" (NumV 3.0),Binding \"a\" (NumV 4.0),Binding \"b\" (NumV 5.0)]" result4
+  checkEqual "Error: Unable to Extend Environment" errorResult1
+  checkEqual "Error: Unable to Extend Environment" errorResult2
+
+
+  -- equalValues tests
+  let numValue1 = NumV 1.0
+  let numValue2 = NumV 1.0
+  let numValue3 = NumV 2.0
+  let string1 = StringV "hello"
+  let string2 = StringV "hello"
+  let string3 = StringV "world"
+  let result1 = equalValues numValue1 numValue2
+  let result2 = equalValues numValue1 numValue3
+  let result3 = equalValues string1 string2
+  let result4 = equalValues string1 string3
+  let result5 = equalValues numValue1 string1
+  checkEqual True result1
+  checkEqual False result2
+  checkEqual True result3
+  checkEqual False result4
+  checkEqual False result5
+
+  -- applyPrim tests
+  let addResult = handleResult (runExcept (applyPrim "+" [NumV 2.0, NumV 2.0]))
+  let subResult = handleResult (runExcept (applyPrim "-" [NumV 1.0, NumV 2.0]))
+  let mulResult = handleResult (runExcept (applyPrim "*" [NumV 1.0, NumV 2.0]))
+  let divResult = handleResult (runExcept (applyPrim "/" [NumV 1.0, NumV 2.0]))
+  let divErrorResult = handleResult (runExcept (applyPrim "/" [NumV 1.0, NumV 0.0]))
+  let lessThanResult = handleResult (runExcept (applyPrim "<=" [NumV 1.0, NumV 2.0]))
+  let equalResult = handleResult (runExcept (applyPrim "equal?" [NumV 1.0, NumV 2.0]))
+  let errorResult = handleResult (runExcept (applyPrim "error" []))
+  let unknownOpResult = handleResult (runExcept (applyPrim "unknown" []))
+  checkEqual "4.0" addResult
+  checkEqual "-1.0" subResult
+  checkEqual "2.0" mulResult
+  checkEqual "0.5" divResult
+  checkEqual "Error: Division by zero" divErrorResult
+  checkEqual "True" lessThanResult
+  checkEqual "False" equalResult
+  checkEqual "Error: User-defined error" errorResult
+  checkEqual "Error: Unknown operator or incorrect arguments" unknownOpResult
+
+  -- serialize tests
+  let numValue = NumV 1.0
+  let stringValue = StringV "wow I'm so cool"
+  let boolValue = BoolV True
+  let cloValue = CloV ["a", "b"] (AppC (IdC "+") [IdC "a", IdC "b"]) []
+  let opValue = OpV "+"
+  let numResult = serialize numValue
+  let stringResult = serialize stringValue
+  let boolResult = serialize boolValue
+  let cloResult = serialize cloValue
+  let opResult = serialize opValue
+  checkEqual "1.0" numResult
+  checkEqual "\"wow I'm so cool\"" stringResult
+  checkEqual "True" boolResult
+  checkEqual "#<procedure>" cloResult
+  checkEqual "#<primitive +>" opResult
+
+  putStrLn "All tests above passed!"
 
 
  {-main = do
