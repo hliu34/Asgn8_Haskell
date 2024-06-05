@@ -1,4 +1,7 @@
 import Control.Monad.Except  -- Import from this library
+import Data.Char (isDigit, isSpace)
+import Debug.Trace (trace)
+import Control.Arrow (Arrow(second))
 type InterpM = Except String -- used for finding errors, will return a String error type
 
 
@@ -34,6 +37,100 @@ data Binding = Binding String Value
 type Env = [Binding]
 
 
+-- BNF is
+-- <expr> ::= <num> | <id> | <string> | <if> | <lambda> | <app>
+-- <num> ::= number
+-- <id> ::= identifier
+-- <string> ::= string
+-- <if> ::= {if <expr> <expr> <expr>}
+-- <lambda> ::= {lambda {<id>*} <expr>}
+-- <app> ::= {<expr> <expr>*}
+
+-- Converts {lamb {x y z} {{c 3} 4 5}} to [lamb, {x y z}, {{c 3} 4 5}]
+
+data StringOrNumberOrBoolean
+  = VString String
+  | VNumber Int
+  | VNest [StringOrNumberOrBoolean]
+  deriving (Show, Eq)
+
+parseAtom :: String -> StringOrNumberOrBoolean
+parseAtom s = case reads s of
+  [(n, "")] -> VNumber n
+  _ -> VString s
+
+-- Parses {lamb {x y z} {{c 3} 4 5}} into [lamb, [x y z] [[c 3] 4 5]]
+parseBasic :: String -> [StringOrNumberOrBoolean]
+parseBasic s =
+  let arr = [] :: [StringOrNumberOrBoolean]
+      s' = tail s  -- remove the { from the string
+  in parseBasicHelper s' arr
+
+parseBasicHelper :: String -> [StringOrNumberOrBoolean] -> [StringOrNumberOrBoolean]
+parseBasicHelper [] arr = arr
+parseBasicHelper s arr
+  | head s == '{' =
+      let (nested, remaining) = parseNested s
+      in parseBasicHelper (skipWhitespace remaining) (arr ++ [VNest nested])
+  | head s == ' ' = parseBasicHelper (tail s) arr
+  | head s == '}' = arr
+  | otherwise =
+      let (word, rest) = break (\c -> c == ' ' || c == '}') s
+      in parseBasicHelper (skipWhitespace rest) (arr ++ [parseAtom word])
+
+-- Skip leading whitespace
+skipWhitespace :: String -> String
+skipWhitespace = dropWhile isSpace
+
+-- Helper function to parse nested structures
+parseNested :: String -> ([StringOrNumberOrBoolean], String)
+parseNested s =
+  let (nested, remaining) = extractNested 1 (tail s) []
+  in (parseBasicHelper nested [], remaining)
+
+extractNested :: Int -> String -> String -> (String, String)
+-- Two bases cases
+extractNested 0 remaining current = (reverse current, remaining)
+-- Reversing because we have been adding to the front
+extractNested _ [] acc = (reverse acc, [])
+extractNested n (x:xs) acc
+  -- Either accumulate one 
+  | x == '{' = extractNested (n + 1) xs (x:acc)
+  -- Or deaccumulate one
+  | x == '}' = extractNested (n - 1) xs (x:acc)
+  | otherwise = extractNested n xs (x:acc)
+
+-- Now the real parsing
+-- Take in a list of lists of StringOrNumberOrBoolean
+-- Return an ExprC
+parse :: [StringOrNumberOrBoolean] -> ExprC
+parse [VNumber n] = NumC (fromIntegral n)
+parse [VString s] = IdC s
+parse [VNest exprs] = parseNestedExprs exprs
+parse (VNest exprs : rest) = AppC (parseNestedExprs exprs) (map parseExpr rest)
+parse exprs = error $ "Invalid expression: " ++ show exprs
+
+parseNestedExprs :: [StringOrNumberOrBoolean] -> ExprC
+parseNestedExprs [VString "if", cond, thenExpr, elseExpr] =
+  IfC (parseExpr cond) (parseExpr thenExpr) (parseExpr elseExpr)
+parseNestedExprs (VString "lamb" : VNest params : body : []) =
+  let paramStrings = map (\(VString s) -> s) params
+  in LambC paramStrings (parseExpr body)
+parseNestedExprs (func : args) = AppC (parseExpr func) (map parseExpr args)
+parseNestedExprs exprs = error $ "Invalid nested expression: " ++ show exprs
+
+-- Helper function to parse individual expressions
+parseExpr :: StringOrNumberOrBoolean -> ExprC
+parseExpr (VNumber n) = NumC (fromIntegral n)
+parseExpr (VString s) = IdC s
+parseExpr (VNest exprs) = parseNestedExprs exprs
+parseExpr _ = error "Unexpected expression"
+
+
+topParse :: String -> ExprC
+topParse s = parse $ [VNest (parseBasic s)]
+
+----- END OF PARSING -----
 
 -- Lookup from Environment
 lookupEnv :: String -> Env -> InterpM Value
@@ -133,6 +230,18 @@ checkEqual expected actual =
     then putStrLn $ "Test passed: " ++ show expected ++ " == " ++ show actual
     else putStrLn $ "Test failed: " ++ show expected ++ " != " ++ show actual
 
+topInterp :: String -> InterpM Value
+topInterp s = interp (topParse s) [
+          Binding "true" (BoolV True),
+          Binding "false" (BoolV False),
+          Binding "+" (OpV "+"),
+          Binding "-" (OpV "-"),
+          Binding "*" (OpV "*"),
+          Binding "/" (OpV "/"),
+          Binding "<=" (OpV "<="),
+          Binding "equal?" (OpV "equal?"),
+          Binding "error" (OpV "error")
+          ]
 
 main = do
   let topEnv = [
@@ -278,6 +387,24 @@ main = do
   checkEqual "#<procedure>" cloResult
   checkEqual "#<primitive +>" opResult
 
+
+  -- parseAtom tests
+  let stringAtom = parseAtom "hello"
+  let numberAtom = parseAtom "42"
+  let boolAtom = parseAtom "true"
+  let errorAtom = parseAtom "error"
+  checkEqual (VString "hello") stringAtom
+  checkEqual (VNumber 42) numberAtom
+  checkEqual (VString "error") errorAtom
+
+  -- topInterp tests
+  let basic
+        = "{{lamb {a b c d} {+ {+ a b} {+ c d}}} 4 5 6 7}"
+  let basicResult = handleResult (runExcept (topInterp basic))
+  let ifTest = "{if true {+ 4 5} {- 4 5}}"
+  let ifTestResult = handleResult (runExcept (topInterp ifTest))
+  checkEqual basicResult "22.0"
+  checkEqual ifTestResult "9.0"
   putStrLn "All tests above passed!"
 
 
