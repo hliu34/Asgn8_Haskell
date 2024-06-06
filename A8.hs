@@ -15,7 +15,7 @@ data ExprC
   | IfC ExprC ExprC ExprC
   | LambC [String] ExprC
   | AppC ExprC [ExprC]
-  deriving (Show) -- need this to print out the 'ExprC' values
+  deriving (Show, Eq) -- need this to print out the 'ExprC' values
 
 
 -- defining the Value data type
@@ -243,6 +243,210 @@ topInterp s = interp (topParse s) [
           Binding "error" (OpV "error")
           ]
 
+
+-- Tests for interpreting expressions
+interpTests :: IO ()
+interpTests = do
+  let topEnv = [
+          Binding "true" (BoolV True),
+          Binding "false" (BoolV False),
+          Binding "+" (OpV "+"),
+          Binding "-" (OpV "-"),
+          Binding "*" (OpV "*"),
+          Binding "/" (OpV "/"),
+          Binding "<=" (OpV "<="),
+          Binding "equal?" (OpV "equal?"),
+          Binding "error" (OpV "error"),
+          Binding "x" (NumV 42.0),
+          Binding "y" (BoolV True),
+          Binding "z" (StringV "Test")
+          ]
+  let handleResult result =
+          case result of
+            Left err -> err
+            Right val -> serialize val
+
+  -- Number expressions
+  checkEqual "3.14" (handleResult (runExcept (interp (NumC 3.14) topEnv)))
+  
+  -- Identifier expressions
+  checkEqual "42.0" (handleResult (runExcept (interp (IdC "x") topEnv)))
+  checkEqual "\"Test\"" (handleResult (runExcept (interp (IdC "z") topEnv)))
+  
+  -- String expressions
+  checkEqual "\"hello\"" (handleResult (runExcept (interp (StringC "hello") topEnv)))
+  
+  -- If expressions
+  checkEqual "\"hello\"" (handleResult (runExcept (interp (IfC (IdC "y") (StringC "hello") (NumC 3.12)) topEnv)))
+  checkEqual "3.12" (handleResult (runExcept (interp (IfC (IdC "false") (StringC "hello") (NumC 3.12)) topEnv)))
+  
+  -- Lambda expressions
+  let lambExpr = LambC ["a", "b"] (AppC (IdC "+") [IdC "a", IdC "b"])
+  checkEqual "#<procedure>" (handleResult (runExcept (interp lambExpr topEnv)))
+  
+  -- Application expressions
+  let appExpr = AppC lambExpr [NumC 3, NumC 4]
+  checkEqual "7.0" (handleResult (runExcept (interp appExpr topEnv)))
+  
+  -- Nested If expressions
+  let nestedIfExpr = IfC (IdC "true") (NumC 2.0) (NumC 10.0)
+  checkEqual "2.0" (handleResult (runExcept (interp nestedIfExpr topEnv)))
+  
+  -- Nested Lambda expressions
+  let nestedLambExpr = LambC ["a"] (LambC ["b"] (AppC (IdC "+") [IdC "a", IdC "b"]))
+  checkEqual "#<procedure>" (handleResult (runExcept (interp nestedLambExpr topEnv)))
+  
+  -- Nested Application expressions
+  let nestedAppExpr = AppC (AppC nestedLambExpr [NumC 2]) [NumC 3]
+  checkEqual "5.0" (handleResult (runExcept (interp nestedAppExpr topEnv)))
+  
+  -- Adding four numbers
+  let addingFourNumbers = AppC (LambC ["a", "b", "c", "d"] (AppC (IdC "+") [AppC (IdC "+") [IdC "a", IdC "b"], AppC (IdC "+") [IdC "c", IdC "d"]])) [NumC 1, NumC 2, NumC 3, NumC 4]
+  checkEqual "10.0" (handleResult (runExcept (interp addingFourNumbers topEnv)))
+  
+  -- Error case: application of a non-function
+  let errorResult = handleResult (runExcept (interp (AppC (IdC "doesntExist") [NumC 1]) topEnv))
+  checkEqual "Error: Unable to find in Environment" errorResult
+  
+  putStrLn "interpTests completed."
+
+
+-- Tests for extending environment
+extendEnvTests :: IO ()
+extendEnvTests = do
+  let handleEnvResult result =
+          case result of
+            Left err -> err
+            Right env -> show env
+  let env = []
+  let env1 = [Binding "x" (NumV 1.0)]
+  let env2 = [Binding "x" (NumV 1.0), Binding "y" (NumV 2.0)]
+  let env3 = [Binding "x" (NumV 1.0), Binding "y" (NumV 2.0), Binding "z" (NumV 3.0)]
+  let env4 = [Binding "x" (NumV 1.0), Binding "y" (NumV 2.0), Binding "z" (NumV 3.0), Binding "a" (NumV 4.0), Binding "b" (NumV 5.0)]
+  
+  checkEqual "[Binding \"x\" (NumV 1.0)]" (handleEnvResult (runExcept (extendEnv env ["x"] [NumV 1.0])))
+  checkEqual "[Binding \"x\" (NumV 1.0),Binding \"y\" (NumV 2.0)]" (handleEnvResult (runExcept (extendEnv env1 ["y"] [NumV 2.0])))
+  checkEqual "[Binding \"x\" (NumV 1.0),Binding \"y\" (NumV 2.0),Binding \"z\" (NumV 3.0)]" (handleEnvResult (runExcept (extendEnv env2 ["z"] [NumV 3.0])))
+  checkEqual "[Binding \"x\" (NumV 1.0),Binding \"y\" (NumV 2.0),Binding \"z\" (NumV 3.0),Binding \"a\" (NumV 4.0),Binding \"b\" (NumV 5.0)]" (handleEnvResult (runExcept (extendEnv env3 ["a", "b"] [NumV 4.0, NumV 5.0])))
+  checkEqual "Error: Unable to Extend Environment" (handleEnvResult (runExcept (extendEnv env ["x"] [NumV 1.0, NumV 2.0])))
+  checkEqual "Error: Unable to Extend Environment" (handleEnvResult (runExcept (extendEnv env ["x", "y"] [NumV 1.0])))
+
+  putStrLn "extendEnvTests completed."
+
+
+-- Tests for applying primitive operations
+applyPrimTests :: IO ()
+applyPrimTests = do
+  let handleResult result =
+          case result of
+            Left err -> err
+            Right val -> serialize val
+
+  checkEqual "4.0" (handleResult (runExcept (applyPrim "+" [NumV 2.0, NumV 2.0])))
+  checkEqual "-1.0" (handleResult (runExcept (applyPrim "-" [NumV 1.0, NumV 2.0])))
+  checkEqual "2.0" (handleResult (runExcept (applyPrim "*" [NumV 1.0, NumV 2.0])))
+  checkEqual "0.5" (handleResult (runExcept (applyPrim "/" [NumV 1.0, NumV 2.0])))
+  checkEqual "Error: Division by zero" (handleResult (runExcept (applyPrim "/" [NumV 1.0, NumV 0.0])))
+  checkEqual "True" (handleResult (runExcept (applyPrim "<=" [NumV 1.0, NumV 2.0])))
+  checkEqual "False" (handleResult (runExcept (applyPrim "equal?" [NumV 1.0, NumV 2.0])))
+  checkEqual "Error: User-defined error" (handleResult (runExcept (applyPrim "error" [])))
+  checkEqual "Error: Unknown operator or incorrect arguments" (handleResult (runExcept (applyPrim "unknown" [])))
+
+  putStrLn "applyPrimTests completed."
+
+
+-- Tests for serializing values
+serializeTests :: IO ()
+serializeTests = do
+  let numValue = NumV 1.0
+  let stringValue = StringV "wow I'm so cool"
+  let boolValue = BoolV True
+  let cloValue = CloV ["a", "b"] (AppC (IdC "+") [IdC "a", IdC "b"]) []
+  let opValue = OpV "+"
+  
+  checkEqual "1.0" (serialize numValue)
+  checkEqual "\"wow I'm so cool\"" (serialize stringValue)
+  checkEqual "True" (serialize boolValue)
+  checkEqual "#<procedure>" (serialize cloValue)
+  checkEqual "#<primitive +>" (serialize opValue)
+
+  putStrLn "serializeTests completed."
+
+
+
+-- Tests for parsing atoms
+parseAtomTests :: IO ()
+parseAtomTests = do
+  checkEqual (VString "hello") (parseAtom "hello")
+  checkEqual (VNumber 42) (parseAtom "42")
+  checkEqual (VString "error") (parseAtom "error")
+
+  putStrLn "parseAtomTests completed."
+
+
+
+-- Tests for top-level interpretation
+topInterpTests :: IO ()
+topInterpTests = do
+  let handleResult result =
+          case result of
+            Left err -> err
+            Right val -> serialize val
+
+  let basic = "{{lamb {a b c d} {+ {+ a b} {+ c d}}} 4 5 6 7}"
+  checkEqual "22.0" (handleResult (runExcept (topInterp basic)))
+
+  let ifTest = "{if true {+ 4 5} {- 4 5}}"
+  checkEqual "9.0" (handleResult (runExcept (topInterp ifTest)))
+
+  let nestedIfTest = "{if false {+ 4 5} {if true {+ 1 1} {+ 2 2}}}"
+  checkEqual "2.0" (handleResult (runExcept (topInterp nestedIfTest)))
+
+
+  putStrLn "topInterpTests completed."
+
+
+
+-- Tests for parsing
+parseTests :: IO ()
+parseTests = do
+  -- Test for numeric literals
+  --checkEqual (NumC 42) (topParse "42")
+ -- checkEqual (NumC 3.14) (topParse "3.14")
+  
+  -- Test for identifiers
+ -- checkEqual (IdC "x") (topParse "x")
+ -- checkEqual (IdC "y") (topParse "y")
+
+  -- Test for string literals
+ -- checkEqual (StringC "hello") (topParse "\"hello\"")
+ -- checkEqual (StringC "world") (topParse "\"world\"")
+
+  -- Test for if expressions
+  checkEqual (IfC (IdC "cond") (NumC 1) (NumC 0)) (topParse "{if cond 1 0}")
+  checkEqual (IfC (IdC "cond") (IdC "trueBranch") (IdC "falseBranch")) (topParse "{if cond trueBranch falseBranch}")
+
+  -- Test for lambda expressions
+  checkEqual (LambC ["x"] (IdC "x")) (topParse "{lamb {x} x}")
+  checkEqual (LambC ["x", "y"] (AppC (IdC "+") [IdC "x", IdC "y"])) (topParse "{lamb {x y} {+ x y}}")
+
+  -- Test for application expressions
+  checkEqual (AppC (IdC "f") [NumC 1]) (topParse "{f 1}")
+  checkEqual (AppC (IdC "g") [IdC "x", IdC "y"]) (topParse "{g x y}")
+
+  -- Test for nested expressions
+  checkEqual (AppC (IfC (IdC "cond") (IdC "f") (IdC "g")) [IdC "x"]) (topParse "{{if cond f g} x}")
+  checkEqual (AppC (LambC ["x"] (AppC (IdC "+") [IdC "x", NumC 1])) [NumC 5]) (topParse "{{lamb {x} {+ x 1}} 5}")
+
+  -- Test for complex nested expressions
+  checkEqual (AppC (LambC ["x"] (IfC (AppC (IdC "<=") [IdC "x", NumC 0]) (NumC 0) (AppC (IdC "+") [IdC "x", NumC 1]))) [NumC 10]) 
+    (topParse "{{lamb {x} {if {<= x 0} 0 {+ x 1}}} 10}")
+
+  putStrLn "parseTests completed."
+
+
+
+
 main = do
   let topEnv = [
           Binding "true" (BoolV True),
@@ -405,7 +609,22 @@ main = do
   let ifTestResult = handleResult (runExcept (topInterp ifTest))
   checkEqual basicResult "22.0"
   checkEqual ifTestResult "9.0"
-  putStrLn "All tests above passed!"
+  
+  putStrLn "Running interpTests..."
+  interpTests
+  putStrLn "Running extendEnvTests..."
+  extendEnvTests
+  putStrLn "Running applyPrimTests..."
+  applyPrimTests
+  putStrLn "Running serializeTests..."
+  serializeTests
+  putStrLn "Running parseAtomTests..."
+  parseAtomTests
+  putStrLn "Running topInterpTests..."
+  topInterpTests
+  putStrLn "Running parseTests..."
+  parseTests
+  putStrLn "All tests completed."
 
 
  {-main = do
@@ -424,7 +643,6 @@ main = do
     putStrLn $ "If expression: " ++ show ifExpr
     putStrLn $ "Lamb expression: " ++ show lambExpr
     putStrLn $ "App expression: " ++ show appExpr  -}
-
 
 
 
