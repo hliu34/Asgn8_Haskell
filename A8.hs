@@ -2,6 +2,7 @@ import Control.Monad.Except  -- Import from this library
 import Data.Char (isDigit, isSpace)
 import Debug.Trace (trace)
 import Control.Arrow (Arrow(second))
+
 type InterpM = Except String -- used for finding errors, will return a String error type
 
 
@@ -127,8 +128,17 @@ parseExpr (VNest exprs) = parseNestedExprs exprs
 parseExpr _ = error "Unexpected expression"
 
 
+
 topParse :: String -> ExprC
-topParse s = parse $ [VNest (parseBasic s)]
+topParse s
+  | all isDigit s = NumC (read s)
+  | all (\c -> isDigit c || c == '.') s && (length (filter (== '.') s) == 1) = NumC (read s)
+  | head s == '"' && last s == '"' = StringC (init (tail s))
+  | head s == '{' = parse $ [VNest (parseBasic s)]
+  | otherwise = IdC s
+
+
+
 
 ----- END OF PARSING -----
 
@@ -411,16 +421,16 @@ topInterpTests = do
 parseTests :: IO ()
 parseTests = do
   -- Test for numeric literals
-  --checkEqual (NumC 42) (topParse "42")
- -- checkEqual (NumC 3.14) (topParse "3.14")
+  checkEqual (NumC 42) (topParse "42")
+  checkEqual (NumC 3.14) (topParse "3.14")
   
   -- Test for identifiers
- -- checkEqual (IdC "x") (topParse "x")
- -- checkEqual (IdC "y") (topParse "y")
+  checkEqual (IdC "x") (topParse "x")
+  checkEqual (IdC "y") (topParse "y")
 
   -- Test for string literals
- -- checkEqual (StringC "hello") (topParse "\"hello\"")
- -- checkEqual (StringC "world") (topParse "\"world\"")
+  checkEqual (StringC "hello") (topParse "\"hello\"")
+  checkEqual (StringC "world") (topParse "\"world\"")
 
   -- Test for if expressions
   checkEqual (IfC (IdC "cond") (NumC 1) (NumC 0)) (topParse "{if cond 1 0}")
@@ -643,7 +653,6 @@ main = do
     putStrLn $ "If expression: " ++ show ifExpr
     putStrLn $ "Lamb expression: " ++ show lambExpr
     putStrLn $ "App expression: " ++ show appExpr  -}
-
 
 
 
